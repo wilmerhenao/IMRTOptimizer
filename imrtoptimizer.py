@@ -5,6 +5,7 @@ import numpy as np
 import scipy.io as sio
 from scipy import sparse
 from scipy.optimize import minimize
+import time
 
 # First of all make sure that I can read the data
 
@@ -28,6 +29,10 @@ algfile = '/home/wilmer/Dropbox/IpOptSolver/TestData/HNdata/algInputsWilmer.txt'
 ## Priority list of Organs of Interest. The 1 is subtracted at read time so the user doesn't have to do it everytime
 priority = [7, 24, 25, 23, 22, 21, 20, 16, 15, 14, 13, 12, 10, 11, 9, 4, 3, 1, 2, 17, 18, 19, 5, 6, 8]
 priority = (np.array(priority)-1).tolist()
+
+## This variable determines whether you want to cut the matrix to only a subset of beamlets. This is created in order
+# to have a benchmark to measure VMAT
+cutmatrix = True
 
 class region:
     """ Contains all information relevant to a particular region"""
@@ -80,6 +85,22 @@ class imrt_class:
     # dose variables
     currentDose = [] # dose variable
     currentIntensities = []
+
+    ## this is the intersection of all beamlets geographical locations in centimeters
+    ## It is unique for each value in the x coordinate axis. Beamlet data is organized first in the X axis and then
+    # moves onto the Y axis
+    xinter = []
+    ## Same as xinter but for y axis
+    yinter = []
+
+    ## This is a list of lists; There is one for each aperture angle and it contains the x coordinate of each of the
+    # nonzero available beamlets
+    xdirection = []
+    ## Same as xdirection but in the y coordinate
+    ydirection = []
+
+    ## Dose Matrix Collection
+    Dlist = []
 
     # data class function
     def calcDose(self, newIntensities):
@@ -211,7 +232,7 @@ print('Masking has been calculated')
 
 gastart = 0 ;
 gaend = 356;
-gastep = 2;
+gastep = 60;
 castart = 0;
 caend = 0;
 castep = 0;
@@ -262,6 +283,15 @@ for i in range(0, data.numbeams):
     data.beamletsPerBeam[i] = int(binfoholder['numBeamlets'])
     data.dijsPerBeam[i] =  int(binfoholder['numberNonZerosDij'])
     beamletCounter[i+1] = beamletCounter[i] + data.beamletsPerBeam[i]
+    ## This part added for comparison with VMAT
+    data.xdirection.append(binfoholder['x'][0])
+    data.ydirection.append(binfoholder['y'][0])
+    if 0 == i:
+        data.xinter = data.xdirection[0]
+        data.yinter = data.ydirection[0]
+    else:
+        data.xinter = np.intersect1d(data.xinter, data.xdirection[i])
+        data.yinter = np.intersect1d(data.yinter, data.ydirection[i])
 
 # Generating dose matrix dimensions
 data.numX = sum(data.beamletsPerBeam)
@@ -270,25 +300,26 @@ data.totaldijs = sum(data.dijsPerBeam)
 data.Dmat = sparse.csr_matrix((data.numX, data.numvoxels), dtype=float)
 
 # Work with the D matrices for each beam angle
+
+data.Dlist = [None] * data.numbeams
+
 overallDijsCounter = 0
 for i in range(0, data.numbeams):
     fname = 'Gantry' + str(ga[i]) + '_Couch' + str(0) + '_D.mat'
     print('Processing matrix from gantry & couch angle: ' + fname)
     # extract voxel, beamlet indices and dose values
     D = sio.loadmat(fname)['D']
-    # write out bixel sorted binary file
-    [b,j,d] = sparse.find(D)
-    newb = originalVoxels[b]
-
-    nBPB[i] = max(j)
-    nDIJSPB[i] = len(d)
 
     # write out voxel sorted binary file
     [jt,bt,dt] = sparse.find(D.transpose())
     newbt = originalVoxels[bt]
+    data.Dlist[i] = sparse.csr_matrix((dt, (jt, newbt)), shape = (data.numX, data.numvoxels), dtype = float)
     # Notice here that python is smart enough to subtract 1 from matlab's mat
     # files (where the index goes). This was confirmed by Wilmer on 10/19/2015
-    tempsparse=sparse.csr_matrix((dt,(jt + beamletCounter[i], newbt)),
+
+for i in range(0, data.numbeams):
+    [jt,bt,dt] = sparse.find(data.Dlist[i])
+    tempsparse=sparse.csr_matrix((dt,(jt + beamletCounter[i], bt)),
                                  shape=(data.numX, data.numvoxels), dtype=float)
     data.Dmat = data.Dmat + tempsparse
 
@@ -297,6 +328,8 @@ for i in range(0, data.numbeams):
     nBeams = len(ga)
     nBeamlets = np.zeros(nBeams)
     rowCumSum = []
+
+
 print('Finished reading D matrices')
 
 ## Read in the objective file:
@@ -373,7 +406,6 @@ def evaluateHessian(x):
     data.calcDose(x)
     quadHelperAlphaBetas = (data.currentDose < quadHelperThresh) * 2 * quadHelperUnder
     quadHelperAlphaBetas += (data.currentDose >= quadHelperThresh) * 2 * quadHelperOver
-    # generate Hessian using matrix multiplication
     abDmat = data.Dmat *sparse.diags(quadHelperAlphaBetas, 0)* data.Dmat.transpose()
     return(abDmat)
 
@@ -394,7 +426,10 @@ def calcObjGrad(x):
 # find initial location
 data.currentIntensities = np.zeros(data.numX)
 data.calcDose(data.currentIntensities)
+before  = time.time()
 res = minimize(calcObjGrad, data.currentIntensities,method='L-BFGS-B', jac = True, bounds=[(0, None) for i in range(0, len(data.currentIntensities))], options={'ftol':1e-6,'disp':5})
+after = time.time()
+print('The whole program took: '  + str(time.time() - start) + ' seconds to finish')
 # results = pyipopt.fmin_unconstrained(evaluateFunction, data.currentIntensities+1, evaluateGradient, None)
 # results = pyipopt.fmin_unconstrained(evaluateFunction, data.currentIntensities+1, evaluateGradient, evaluateHessian)
 # print results
