@@ -232,7 +232,7 @@ print('Masking has been calculated')
 
 gastart = 0 ;
 gaend = 356;
-gastep = 60;
+gastep = 2;
 castart = 0;
 caend = 0;
 castep = 0;
@@ -293,12 +293,14 @@ for i in range(0, data.numbeams):
         data.xinter = np.intersect1d(data.xinter, data.xdirection[i])
         data.yinter = np.intersect1d(data.yinter, data.ydirection[i])
 
+## After reading the beaminfo information. Read CUT the data.
+
+N = len(data.yinter) #N will be related to the Y axis.
+M = len(data.xinter) #M will be related to the X axis.
+
 # Generating dose matrix dimensions
 data.numX = sum(data.beamletsPerBeam)
 data.totaldijs = sum(data.dijsPerBeam)
-# Allocate structure for full Dmat file
-data.Dmat = sparse.csr_matrix((data.numX, data.numvoxels), dtype=float)
-
 # Work with the D matrices for each beam angle
 
 data.Dlist = [None] * data.numbeams
@@ -317,6 +319,24 @@ for i in range(0, data.numbeams):
     # Notice here that python is smart enough to subtract 1 from matlab's mat
     # files (where the index goes). This was confirmed by Wilmer on 10/19/2015
 
+if cutmatrix:
+    for i in range(0, data.numbeams):
+        ## ininter will contain the beamlet directions that belong in the intersection of all apertures
+        ininter = []
+        for j in range(0, len(data.xdirection[i])):
+            if (data.xdirection[i][j] in data.xinter and data.ydirection[i][j] in data.yinter):
+                ininter.append(j)
+        # Once I have ininter I will cut all the elements that are
+        data.xdirection[i] = data.xdirection[i][ininter]
+        data.ydirection[i] = data.ydirection[i][ininter]
+        print(type(data.Dlist[i]))
+        data.Dlist[i] = data.Dlist[i][ininter,:]
+        data.beamletsPerBeam[i] = len(ininter)
+        beamletCounter[i+1] = beamletCounter[i] + data.beamletsPerBeam[i]
+
+# Allocate structure for full Dmat file
+data.numX = sum(data.beamletsPerBeam)
+data.Dmat = sparse.csr_matrix((data.numX, data.numvoxels), dtype=float)
 for i in range(0, data.numbeams):
     [jt,bt,dt] = sparse.find(data.Dlist[i])
     tempsparse=sparse.csr_matrix((dt,(jt + beamletCounter[i], bt)),
